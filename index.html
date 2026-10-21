@@ -1,0 +1,580 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sky Hopper - Doodle Jump</title>
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 16px 10px;
+  min-height: 100vh;
+  background: #10172b;
+  color: white;
+  font-family: Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+h1 { color: #7cf7c7; margin: 0; letter-spacing: 3px; }
+.subtitle { color: #aab7d7; margin: 6px 0 14px; font-size: 13px; }
+
+.game { width: min(100%, 380px); }
+
+.stats {
+  display: flex;
+  gap: 7px;
+  margin-bottom: 9px;
+}
+
+.stat {
+  flex: 1;
+  padding: 9px;
+  border-radius: 9px;
+  background: #202b49;
+  border: 1px solid #39496f;
+}
+
+.label { color: #aab7d7; font-size: 10px; letter-spacing: 1px; }
+.value { font-size: 21px; font-weight: bold; margin-top: 4px; }
+
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #d9f5ff;
+  border: 3px solid #526b9c;
+  border-radius: 10px;
+}
+
+.buttons { display: flex; gap: 8px; margin-top: 10px; }
+
+button {
+  flex: 1;
+  padding: 12px 8px;
+  background: #5368a3;
+  color: white;
+  border: 0;
+  border-radius: 9px;
+  font-size: 15px;
+  font-weight: bold;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+button:active { background: #7589c7; transform: scale(.97); }
+
+.controls {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.controls button {
+  background: #2a375b;
+  font-size: 24px;
+  padding: 13px;
+}
+
+.help {
+  color: #aab7d7;
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.7;
+  margin-top: 12px;
+}
+</style>
+</head>
+<body>
+
+<h1>SKY HOPPER</h1>
+<div class="subtitle">Jump higher. Don't fall! ☁️</div>
+
+<div class="game">
+  <div class="stats">
+    <div class="stat">
+      <div class="label">SCORE</div>
+      <div class="value" id="score">0</div>
+    </div>
+    <div class="stat">
+      <div class="label">BEST</div>
+      <div class="value" id="best">0</div>
+    </div>
+    <div class="stat">
+      <div class="label">HEIGHT</div>
+      <div class="value" id="height">0 m</div>
+    </div>
+  </div>
+
+  <canvas id="game" width="360" height="540"></canvas>
+
+  <div class="buttons">
+    <button id="start">▶ Start / Restart</button>
+    <button id="pause">Ⅱ Pause</button>
+  </div>
+
+  <div class="controls">
+    <button id="left">⬅️ LEFT</button>
+    <button id="right">RIGHT ➡️</button>
+  </div>
+
+  <div class="help">
+    ← → or A / D to move<br>
+    Land on platforms to bounce automatically.<br>
+    P = Pause · Enter = Restart
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const W = canvas.width;
+const H = canvas.height;
+
+let player;
+let platforms = [];
+let particles = [];
+
+let score = 0;
+let best = Number(localStorage.getItem("skyHopperBest") || 0);
+let cameraY = 0;
+
+let running = false;
+let paused = false;
+let gameOver = false;
+
+let lastTime = 0;
+let keys = { left: false, right: false };
+let touch = { left: false, right: false };
+
+document.getElementById("best").textContent = best;
+
+function random(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function makePlatform(x, y, moving = false) {
+  return {
+    x: x,
+    y: y,
+    w: 70,
+    h: 12,
+    moving: moving,
+    dx: moving ? random(35, 65) * (Math.random() < 0.5 ? -1 : 1) : 0
+  };
+}
+
+function resetGame() {
+  score = 0;
+  cameraY = 0;
+  gameOver = false;
+  paused = false;
+  running = true;
+
+  player = {
+    x: W / 2 - 16,
+    y: H - 100,
+    w: 32,
+    h: 36,
+    vx: 0,
+    vy: -540,
+    face: 1
+  };
+
+  platforms = [makePlatform(W / 2 - 35, H - 48)];
+
+  let y = H - 115;
+
+  while (y > -100) {
+    platforms.push(
+      makePlatform(random(5, W - 75), y, Math.random() < 0.12)
+    );
+    y -= random(58, 82);
+  }
+
+  particles = [];
+  updateStats();
+  draw();
+}
+
+function roundRect(x, y, w, h, r, color, border) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  if (border) {
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
+
+function drawBackground() {
+  const gradient = ctx.createLinearGradient(0, 0, 0, H);
+  gradient.addColorStop(0, "#aeeaff");
+  gradient.addColorStop(1, "#f4fdff");
+
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, W, H);
+
+  // Decorative clouds
+  ctx.fillStyle = "rgba(255,255,255,0.8)";
+
+  for (let i = 0; i < 7; i++) {
+    const x = (i * 73 + 20) % W;
+    const y = (i * 91 + cameraY * 0.2) % (H + 60) - 30;
+
+    ctx.beginPath();
+    ctx.arc(x, y, 15, 0, Math.PI * 2);
+    ctx.arc(x + 17, y - 7, 19, 0, Math.PI * 2);
+    ctx.arc(x + 35, y, 14, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawPlatform(p) {
+  if (p.moving) {
+    roundRect(p.x, p.y, p.w, p.h, 6, "#ffbd59", "#d88725");
+    roundRect(p.x + 8, p.y + 2, p.w - 16, 3, 2, "#ffe7a7");
+  } else {
+    roundRect(p.x, p.y, p.w, p.h, 6, "#52d68a", "#239d5a");
+    roundRect(p.x + 7, p.y + 2, p.w - 14, 3, 2, "#a8f5c5");
+  }
+}
+
+function drawPlayer() {
+  const x = player.x;
+  const y = player.y;
+
+  ctx.save();
+  ctx.translate(x + player.w / 2, y + player.h / 2);
+  ctx.scale(player.face, 1);
+
+  // Feet
+  roundRect(-13, 9, 10, 7, 3, "#f4a261");
+  roundRect(4, 9, 10, 7, 3, "#f4a261");
+
+  // Body
+  roundRect(-15, -13, 30, 27, 10, "#65d878", "#2c9f56");
+
+  // Eyes
+  ctx.fillStyle = "white";
+  ctx.beginPath();
+  ctx.ellipse(-5, -5, 5, 7, 0, 0, Math.PI * 2);
+  ctx.ellipse(7, -5, 5, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#17243b";
+  ctx.beginPath();
+  ctx.arc(-4, -4, 2.3, 0, Math.PI * 2);
+  ctx.arc(8, -4, 2.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Smile
+  ctx.strokeStyle = "#206b45";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(1, 2, 6, 0.15, Math.PI - 0.15);
+  ctx.stroke();
+
+  // Antenna
+  ctx.strokeStyle = "#2c9f56";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, -12);
+  ctx.lineTo(2, -19);
+  ctx.stroke();
+
+  ctx.fillStyle = "#ff6f91";
+  ctx.beginPath();
+  ctx.arc(2, -20, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function makeParticles(x, y) {
+  for (let i = 0; i < 8; i++) {
+    particles.push({
+      x: x,
+      y: y,
+      vx: random(-100, 100),
+      vy: random(-130, 10),
+      life: 0.4,
+      color: "#ffffff"
+    });
+  }
+}
+
+function drawOverlay(title, subtitle) {
+  ctx.fillStyle = "rgba(16,23,43,0.7)";
+  ctx.fillRect(0, 0, W, H);
+
+  roundRect(25, 190, W - 50, 145, 16, "#202b49", "#526b9c");
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#7cf7c7";
+  ctx.font = "bold 27px Arial";
+  ctx.fillText(title, W / 2, 235);
+
+  ctx.fillStyle = "white";
+  ctx.font = "15px Arial";
+  ctx.fillText(subtitle, W / 2, 265);
+
+  ctx.fillStyle = "#aab7d7";
+  ctx.font = "12px Arial";
+  ctx.fillText("Press Start or Enter", W / 2, 297);
+}
+
+function draw() {
+  drawBackground();
+
+  platforms.forEach(drawPlatform);
+
+  if (player) drawPlayer();
+
+  particles.forEach(p => {
+    ctx.globalAlpha = Math.max(0, p.life / 0.4);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.globalAlpha = 1;
+
+  if (!running || paused || gameOver) {
+    if (gameOver) {
+      drawOverlay("GAME OVER", "Score: " + score);
+    } else if (paused) {
+      drawOverlay("PAUSED", "Take a breather!");
+    } else {
+      drawOverlay("SKY HOPPER", "Ready to jump?");
+    }
+  }
+}
+
+function updateStats() {
+  document.getElementById("score").textContent = score;
+  document.getElementById("height").textContent = score + " m";
+
+  if (score > best) {
+    best = score;
+    localStorage.setItem("skyHopperBest", String(best));
+  }
+
+  document.getElementById("best").textContent = best;
+}
+
+function update(dt) {
+  if (!running || paused || gameOver) return;
+
+  const direction =
+    (keys.right || touch.right ? 1 : 0) -
+    (keys.left || touch.left ? 1 : 0);
+
+  player.vx = direction * 255;
+
+  if (direction !== 0) player.face = direction;
+
+  player.x += player.vx * dt;
+
+  // Wrap around screen edges
+  if (player.x > W) player.x = -player.w;
+  if (player.x + player.w < 0) player.x = W;
+
+  const oldBottom = player.y + player.h;
+
+  // Gravity pulls the player down
+  player.vy += 1450 * dt;
+  player.y += player.vy * dt;
+
+  // Move special platforms
+  platforms.forEach(p => {
+    if (p.moving) {
+      p.x += p.dx * dt;
+
+      if (p.x < 0) {
+        p.x = 0;
+        p.dx = Math.abs(p.dx);
+      }
+
+      if (p.x + p.w > W) {
+        p.x = W - p.w;
+        p.dx = -Math.abs(p.dx);
+      }
+    }
+  });
+
+  // Bounce when landing from above
+  if (player.vy > 0) {
+    for (const p of platforms) {
+      const newBottom = player.y + player.h;
+
+      if (
+        oldBottom <= p.y + 5 &&
+        newBottom >= p.y &&
+        player.x + player.w - 5 > p.x &&
+        player.x + 5 < p.x + p.w
+      ) {
+        player.y = p.y - player.h;
+        player.vy = -590;
+        makeParticles(player.x + player.w / 2, p.y);
+        break;
+      }
+    }
+  }
+
+  // Keep the jumper near the upper part of the screen
+  const targetY = H * 0.4;
+
+  if (player.y < targetY) {
+    const shift = targetY - player.y;
+
+    player.y = targetY;
+    platforms.forEach(p => p.y += shift);
+    particles.forEach(p => p.y += shift);
+
+    cameraY += shift;
+    score = Math.max(score, Math.floor(cameraY / 10));
+    updateStats();
+  }
+
+  // Remove platforms that have gone below the screen
+  platforms = platforms.filter(p => p.y < H + 25);
+
+  // Generate new platforms above the screen
+  let highest = platforms.length
+    ? Math.min(...platforms.map(p => p.y))
+    : 0;
+
+  while (highest > -35) {
+    highest -= random(58, Math.min(100, 82 + score / 30));
+
+    platforms.push(
+      makePlatform(
+        random(5, W - 75),
+        highest,
+        score > 100 && Math.random() < 0.25
+      )
+    );
+  }
+
+  // Update bounce particles
+  particles.forEach(p => {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 300 * dt;
+    p.life -= dt;
+  });
+
+  particles = particles.filter(p => p.life > 0);
+
+  // Falling off the screen ends the game
+  if (player.y > H + 35) {
+    gameOver = true;
+    running = false;
+  }
+}
+
+function loop(time = 0) {
+  const dt = Math.min((time - lastTime) / 1000 || 0, 0.033);
+  lastTime = time;
+
+  update(dt);
+  draw();
+
+  requestAnimationFrame(loop);
+}
+
+function togglePause() {
+  if (!player || gameOver || (!running && !paused)) return;
+
+  paused = !paused;
+  running = !paused;
+  draw();
+}
+
+// Keyboard controls
+document.addEventListener("keydown", e => {
+  if (["ArrowLeft", "ArrowRight"].includes(e.key)) {
+    e.preventDefault();
+  }
+
+  if (e.key === "Enter") {
+    resetGame();
+    return;
+  }
+
+  if (e.key.toLowerCase() === "p") {
+    togglePause();
+    return;
+  }
+
+  if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") {
+    keys.left = true;
+  }
+
+  if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") {
+    keys.right = true;
+  }
+});
+
+document.addEventListener("keyup", e => {
+  if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") {
+    keys.left = false;
+  }
+
+  if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") {
+    keys.right = false;
+  }
+});
+
+// Touchscreen and mouse controls
+function holdButton(id, direction) {
+  const button = document.getElementById(id);
+
+  button.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    touch[direction] = true;
+    button.setPointerCapture(e.pointerId);
+  });
+
+  function release() {
+    touch[direction] = false;
+  }
+
+  button.addEventListener("pointerup", release);
+  button.addEventListener("pointercancel", release);
+  button.addEventListener("lostpointercapture", release);
+}
+
+holdButton("left", "left");
+holdButton("right", "right");
+
+window.addEventListener("blur", () => {
+  keys.left = false;
+  keys.right = false;
+  touch.left = false;
+  touch.right = false;
+});
+
+document.getElementById("start").addEventListener("click", resetGame);
+document.getElementById("pause").addEventListener("click", togglePause);
+
+// Draw the start screen
+resetGame();
+running = false;
+draw();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
